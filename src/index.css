@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #101419;
+  --color-surface-dim: #101419;
+  --color-surface-bright: #36393f;
+  --color-surface-variant: #31353b;
+  --color-surface-container-lowest: #0a0e13;
+  --color-surface-container-low: #181c21;
+  --color-surface-container: #1c2025;
+  --color-surface-container-high: #262a30;
+  --color-surface-container-highest: #31353b;
+
+  --color-primary: #c3f5ff;
+  --color-primary-container: #00e5ff;
+  --color-on-primary-container: #00363d;
+  --color-on-primary: #00363d;
+  --color-primary-fixed: #9cf0ff;
+  --color-primary-fixed-dim: #00daf3;
+
+  --color-tertiary: #a7ffd2;
+  --color-tertiary-container: #00eda6;
+  --color-on-tertiary-container: #006645;
+  --color-tertiary-fixed: #46ffb8;
+  --color-tertiary-fixed-dim: #00e29e;
+
+  --color-secondary: #ffb3b6;
+  --color-secondary-container: #df0042;
+  --color-on-secondary-container: #fff1f1;
+
+  --color-on-surface: #e0e2ea;
+  --color-on-surface-variant: #bac9cc;
+  --color-outline: #849396;
+  --color-outline-variant: #3b494c;
+  --color-error: #ffb4ab;
+  --color-error-container: #93000a;
+
+  --font-body-md: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-headline-sm: "Space Grotesk", sans-serif;
+  --font-headline-md: "Space Grotesk", sans-serif;
+  --font-headline-lg: "Space Grotesk", sans-serif;
+  --font-headline-xl: "Space Grotesk", sans-serif;
+  --font-headline-xl-mobile: "Space Grotesk", sans-serif;
+  --font-metric-display: "Space Grotesk", sans-serif;
+  --font-label-caps: "JetBrains Mono", monospace;
+  --font-label-telemetry: "JetBrains Mono", monospace;
+  --font-label-code: "JetBrains Mono", monospace;
+}
+
+@layer base {
+  html, body {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #101419;
+    color: #e0e2ea;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes radarSweep {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-radar-sweep {
+  transform-origin: center center;
+  animation: radarSweep 4s linear infinite;
+}

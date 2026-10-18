@@ -1,0 +1,6 @@
+{
+  "name": "FlushPulse AI - Emergency Restroom Radar & Guidance",
+  "description": "Tactical emergency restroom finder with AI voice HUD, live radar navigation, and indoor entry guidance.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
