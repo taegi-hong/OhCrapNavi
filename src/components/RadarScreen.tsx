@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RestroomCandidate, UserCoordinates, UrgencyLevel } from '../types';
+import { RestroomCandidate, UserCoordinates, UrgencyLevel, WalkRouteInfo } from '../types';
 import { playHapticChime, speakKoreanTTS, stopSpeech } from '../utils/speech';
 import { KakaoMapView } from './KakaoMapView';
 import { ALTERNATIVE_LOCATIONS } from '../data/mockRestrooms';
@@ -36,6 +36,8 @@ interface RadarScreenProps {
     timestamp: number;
   };
   onRefreshNearby?: () => void;
+  walkRoute?: WalkRouteInfo | null;
+  isRouteLoading?: boolean;
 }
 
 export const RadarScreen: React.FC<RadarScreenProps> = ({
@@ -61,26 +63,36 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
   isRestroomApiLoading,
   apiSourceInfo,
   onRefreshNearby,
+  walkRoute = null,
+  isRouteLoading = false,
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [navStepIndex, setNavStepIndex] = useState(0);
   const [isNavMuted, setIsNavMuted] = useState(false);
 
+  // Real pedestrian distance and walking time
+  const walkDist = walkRoute ? walkRoute.distance_meters : selectedRestroom.distance_meters;
+  const walkTime = walkRoute ? walkRoute.walking_time_min : selectedRestroom.walking_time_min;
+  const etaTextDisplay = walkRoute?.eta_text || `도보 약 ${walkTime}분`;
+  const firstInstruction =
+    walkRoute?.steps?.[0]?.instruction ||
+    stepInstruction ||
+    `${selectedRestroom.name} 방면으로 직진 후 건물로 진입하세요.`;
+
   // Dynamic turn-by-turn guidance steps for the selected restroom
   const navSteps = [
     {
-      distance: selectedRestroom.distance_meters,
-      etaText: `도보 ${selectedRestroom.walking_time_min}분`,
+      distance: walkDist,
+      etaText: etaTextDisplay,
       direction: 'arrow_upward',
-      turnDistance: `${Math.max(25, Math.round(selectedRestroom.distance_meters * 0.7))}m 직진`,
-      instruction:
-        stepInstruction || `${selectedRestroom.name} 방면으로 직진 후 건물로 진입하세요.`,
+      turnDistance: `${Math.max(25, Math.round(walkDist * 0.7))}m 직진`,
+      instruction: firstInstruction,
       indoorText:
         selectedRestroom.access_notes || '건물 진입 후 로비 안내데스크 복도 방면',
     },
     {
-      distance: Math.max(15, Math.round(selectedRestroom.distance_meters * 0.25)),
+      distance: Math.max(15, Math.round(walkDist * 0.25)),
       etaText: '도보 1분 미만',
       direction: 'turn_right',
       turnDistance: '15m 우회전',
@@ -149,8 +161,9 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
 
   const handleSpeakGuidance = () => {
     playHapticChime('click');
+    const etaMention = walkRoute?.eta_time_string ? `, ${walkRoute.eta_time_string} 도착 예정` : '';
     speakKoreanTTS(
-      `${selectedRestroom.name}까지 ${selectedRestroom.distance_meters}미터, 도보 ${selectedRestroom.walking_time_min}분입니다. ${selectedRestroom.access_notes}`
+      `${selectedRestroom.name}까지 실제 인도 보행 거리는 ${walkDist}미터, 도보 약 ${walkTime}분 소요되며${etaMention}입니다. ${selectedRestroom.access_notes}`
     );
   };
 
@@ -171,6 +184,8 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
           onOpenSettings={onOpenSettings}
           onStartNavigation={onStartNavigation}
           isNavigating={isNavigating}
+          walkRoute={walkRoute}
+          isRouteLoading={isRouteLoading}
         />
       </div>
 
@@ -191,7 +206,8 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
                     <span className="font-['Space_Grotesk'] text-[15px] font-black text-[#00e5ff]">
                       {currentStep.turnDistance}
                     </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#00e5ff]/20 text-[#46ffb8] font-bold">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#00e5ff]/20 text-[#46ffb8] font-bold flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[11px]">schedule</span>
                       {currentStep.etaText}
                     </span>
                   </div>
@@ -472,19 +488,35 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
               <p className="font-['Inter'] text-[12px] text-[#849396] truncate mt-0.5">
                 {selectedRestroom.floor_or_location_details}
               </p>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="px-1.5 py-0.5 rounded bg-[#46ffb8]/20 text-[#46ffb8] text-[10px] font-bold flex items-center gap-1 border border-[#46ffb8]/40">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#46ffb8] animate-pulse" />
+                  실제 인도(보행로) 기준
+                </span>
+                {isRouteLoading && (
+                  <span className="text-[10px] text-[#849396] flex items-center gap-1 animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00daf3]" />
+                    경로 계산 중...
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Distance & Time Badge */}
             <div className="flex flex-col items-end flex-shrink-0">
               <div className="flex items-baseline gap-1">
                 <span className="font-['Space_Grotesk'] text-[24px] font-black text-[#00e5ff] leading-none">
-                  {selectedRestroom.distance_meters}
+                  {walkDist}
                 </span>
                 <span className="font-['Space_Grotesk'] text-[12px] font-bold text-[#00daf3]">m</span>
               </div>
               <span className="font-['Space_Grotesk'] text-[12px] font-bold text-[#46ffb8]">
-                도보 약 {selectedRestroom.walking_time_min}분
+                도보 약 {walkTime}분
               </span>
+              <div className="mt-1 flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#00e5ff]/15 border border-[#00e5ff]/40 text-[#c3f5ff] text-[10.5px] font-bold font-['Space_Grotesk'] shadow-sm">
+                <span className="material-symbols-outlined text-[12px] text-[#00e5ff]">schedule</span>
+                <span>{walkRoute ? walkRoute.eta_text : '도착시간 계산 중...'}</span>
+              </div>
             </div>
           </div>
 

@@ -58,3 +58,22 @@ export interface UserCoordinates {
   isLiveGps?: boolean;
   timestamp?: number;
 }
+
+export interface WalkRouteStep {
+  instruction: string;
+  distance_meters: number;
+  duration_seconds: number;
+  direction?: string;
+  name?: string;
+}
+
+export interface WalkRouteInfo {
+  distance_meters: number;
+  walking_time_min: number;
+  duration_seconds: number;
+  eta_text: string;
+  eta_time_string: string;
+  coordinates: [number, number][]; // [lat, lng][] along actual sidewalks/crosswalks
+  steps: WalkRouteStep[];
+  isFallback?: boolean;
+}

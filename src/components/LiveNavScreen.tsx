@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RestroomCandidate } from '../types';
+import { RestroomCandidate, WalkRouteInfo } from '../types';
 import { speakKoreanTTS, stopSpeech, playHapticChime } from '../utils/speech';
 
 interface LiveNavScreenProps {
@@ -9,6 +9,7 @@ interface LiveNavScreenProps {
   onExitNav: () => void;
   onReroute: () => void;
   onOpenIndoorWalkthrough: () => void;
+  walkRoute?: WalkRouteInfo | null;
 }
 
 export const LiveNavScreen: React.FC<LiveNavScreenProps> = ({
@@ -18,28 +19,42 @@ export const LiveNavScreen: React.FC<LiveNavScreenProps> = ({
   onExitNav,
   onReroute,
   onOpenIndoorWalkthrough,
+  walkRoute = null,
 }) => {
   const [isMuted, setIsMuted] = useState(false);
-  const [distanceRemaining, setDistanceRemaining] = useState(70);
+  const initialDist = walkRoute ? walkRoute.distance_meters : restroom.distance_meters;
+  const [distanceRemaining, setDistanceRemaining] = useState(initialDist);
   const [navStepIndex, setNavStepIndex] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (walkRoute) {
+      setDistanceRemaining(walkRoute.distance_meters);
+    }
+  }, [walkRoute?.distance_meters]);
+
+  const walkDist = walkRoute ? walkRoute.distance_meters : restroom.distance_meters;
+  const walkTime = walkRoute ? walkRoute.walking_time_min : restroom.walking_time_min;
+  const etaTextDisplay = walkRoute?.eta_text || `도보 약 ${walkTime}분`;
+  const firstInstruction =
+    walkRoute?.steps?.[0]?.instruction ||
+    stepInstruction ||
+    `“${walkDist}m 직진 후 회전문 통과, 로비 우측 복도로 진입하세요.”`;
 
   // Progressive navigation step cues
   const navSteps = [
     {
-      distance: 70,
-      etaText: '1분 미만',
+      distance: walkDist,
+      etaText: etaTextDisplay,
       direction: 'turn_slight_right',
-      turnDistance: '50m',
-      instruction:
-        stepInstruction ||
-        '“50m 직진 후 회전문 통과, 로비 우측 복도로 진입하세요.”',
+      turnDistance: `${Math.max(25, Math.round(walkDist * 0.7))}m`,
+      instruction: firstInstruction,
       indoorText:
         restroom.access_notes || '회전문 ➜ 엘리베이터 우측 복도 끝 ➜ 첫 번째 출입문',
     },
     {
-      distance: 30,
-      etaText: '30초 미만',
+      distance: Math.max(15, Math.round(walkDist * 0.25)),
+      etaText: '도보 1분 미만',
       direction: 'turn_right',
       turnDistance: '15m',
       instruction: '“회전문 통과 후 우측 1층 안내데스크 옆 복도로 진입하세요.”',

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
-import { RestroomCandidate, UserCoordinates } from '../types';
+import { RestroomCandidate, UserCoordinates, WalkRouteInfo } from '../types';
 import { playHapticChime } from '../utils/speech';
 
 interface KakaoMapViewProps {
@@ -12,6 +12,8 @@ interface KakaoMapViewProps {
   onOpenSettings?: () => void;
   onStartNavigation?: () => void;
   isNavigating?: boolean;
+  walkRoute?: WalkRouteInfo | null;
+  isRouteLoading?: boolean;
 }
 
 // Crisp White & Cyan Toilet Graphic SVG (변기 이미지)
@@ -40,6 +42,8 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
   kakaoAppKey,
   onOpenSettings,
   isNavigating = false,
+  walkRoute = null,
+  isRouteLoading = false,
 }) => {
   const kakaoContainerRef = useRef<HTMLDivElement>(null);
   const leafletContainerRef = useRef<HTMLDivElement>(null);
@@ -52,12 +56,16 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
   const kakaoOverlaysRef = useRef<any[]>([]);
   const kakaoUserOverlayRef = useRef<any>(null);
   const kakaoPolylineRef = useRef<any>(null);
+  const kakaoRouteGlowRef = useRef<any>(null);
+  const kakaoRouteBadgeRef = useRef<any>(null);
   const kakaoCircleRef = useRef<any>(null);
 
   // References for Leaflet engine
   const leafletMapRef = useRef<L.Map | null>(null);
   const leafletMarkersRef = useRef<L.LayerGroup | null>(null);
   const leafletRouteRef = useRef<L.Polyline | null>(null);
+  const leafletRouteGlowRef = useRef<L.Polyline | null>(null);
+  const leafletRouteBadgeRef = useRef<L.Marker | null>(null);
   const leafletUserMarkerRef = useRef<L.Marker | null>(null);
   const leafletCircleRef = useRef<L.Circle | null>(null);
 
@@ -174,9 +182,17 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       kakaoUserOverlayRef.current.setMap(null);
       kakaoUserOverlayRef.current = null;
     }
+    if (kakaoRouteGlowRef.current) {
+      kakaoRouteGlowRef.current.setMap(null);
+      kakaoRouteGlowRef.current = null;
+    }
     if (kakaoPolylineRef.current) {
       kakaoPolylineRef.current.setMap(null);
       kakaoPolylineRef.current = null;
+    }
+    if (kakaoRouteBadgeRef.current) {
+      kakaoRouteBadgeRef.current.setMap(null);
+      kakaoRouteBadgeRef.current = null;
     }
 
     // User Location Pin Overlay
@@ -214,10 +230,14 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
 
       let innerHtml = '';
       if (isSelected) {
+        const distLabel = walkRoute ? `인도 ${walkRoute.distance_meters}m` : `${r.distance_meters}m`;
+        const timeLabel = walkRoute ? `${walkRoute.walking_time_min}분` : `${r.walking_time_min}분`;
+        const etaLabel = walkRoute?.eta_time_string ? ` · ${walkRoute.eta_time_string} 도착` : '';
+
         innerHtml = `
           <div style="display:flex; flex-direction:column; align-items:center; transform:translate(-50%, -100%); cursor:pointer;">
-            <div style="display:flex; align-items:center; gap:4px; background:#00e5ff; color:#00363d; padding:4px 10px; border-radius:9999px; box-shadow:0 0 20px rgba(0,229,255,0.9); font-family:'Space Grotesk',sans-serif; font-size:13px; font-weight:800; white-space:nowrap; border:1.5px solid #ffffff;">
-              <span>⚡ ${r.distance_meters}m · ${r.walking_time_min}분</span>
+            <div style="display:flex; align-items:center; gap:4px; background:#00e5ff; color:#00363d; padding:4px 10px; border-radius:9999px; box-shadow:0 0 20px rgba(0,229,255,0.9); font-family:'Space Grotesk',sans-serif; font-size:12px; font-weight:800; white-space:nowrap; border:1.5px solid #ffffff;">
+              <span>⚡ ${distLabel} · ${timeLabel}${etaLabel}</span>
             </div>
             <div style="width:0; height:0; border-left:6px solid transparent; border-right:6px solid transparent; border-top:6px solid #00e5ff; margin-bottom:1px;"></div>
             
@@ -261,25 +281,69 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       kakaoOverlaysRef.current.push(overlay);
     });
 
-    // Route Line Polyline
-    const linePath = [
-      new kakao.maps.LatLng(userLocation.lat, userLocation.lng),
-      new kakao.maps.LatLng(
-        (userLocation.lat + selectedRestroom.lat) / 2 + 0.00004,
-        (userLocation.lng + selectedRestroom.lng) / 2
-      ),
-      new kakao.maps.LatLng(selectedRestroom.lat, selectedRestroom.lng),
-    ];
+    // Real Walkable Pedestrian Route Coordinates
+    const routePoints: [number, number][] =
+      walkRoute?.coordinates && walkRoute.coordinates.length > 1
+        ? walkRoute.coordinates
+        : [
+            [userLocation.lat, userLocation.lng],
+            [
+              (userLocation.lat + selectedRestroom.lat) / 2 + 0.00004,
+              (userLocation.lng + selectedRestroom.lng) / 2,
+            ],
+            [selectedRestroom.lat, selectedRestroom.lng],
+          ];
 
+    const linePath = routePoints.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
+
+    // 1) Outer Neon Glow Polyline
+    const glowPolyline = new kakao.maps.Polyline({
+      path: linePath,
+      strokeWeight: isNavigating ? 14 : 10,
+      strokeColor: '#00e5ff',
+      strokeOpacity: 0.35,
+      strokeStyle: 'solid',
+    });
+    glowPolyline.setMap(map);
+    kakaoRouteGlowRef.current = glowPolyline;
+
+    // 2) Primary Walkable Sidewalk Polyline
     const polyline = new kakao.maps.Polyline({
       path: linePath,
-      strokeWeight: isNavigating ? 8 : 6,
+      strokeWeight: isNavigating ? 7 : 5,
       strokeColor: '#00e5ff',
-      strokeOpacity: 0.95,
+      strokeOpacity: 0.98,
       strokeStyle: 'solid',
     });
     polyline.setMap(map);
     kakaoPolylineRef.current = polyline;
+
+    // 3) Floating Walk Route Info Badge on Map Midpoint
+    const midIdx = Math.floor(routePoints.length / 2);
+    const midCoord = routePoints[midIdx] || [userLocation.lat, userLocation.lng];
+    const displayDist = walkRoute ? `${walkRoute.distance_meters}m` : `${selectedRestroom.distance_meters}m`;
+    const displayTime = walkRoute ? `${walkRoute.walking_time_min}분` : `${selectedRestroom.walking_time_min}분`;
+    const displayEta = walkRoute?.eta_time_string || '';
+
+    const badgeDiv = document.createElement('div');
+    badgeDiv.innerHTML = `
+      <div style="background: rgba(10, 14, 19, 0.94); border: 1.5px solid #00e5ff; box-shadow: 0 0 16px rgba(0, 229, 255, 0.8), 0 4px 12px rgba(0,0,0,0.8); border-radius: 9999px; padding: 4px 10px; color: #ffffff; font-family: 'Space Grotesk', sans-serif; font-size: 11px; font-weight: 800; display: flex; align-items: center; gap: 6px; white-space: nowrap; pointer-events: none; transform: translateY(-12px);">
+        <span style="font-size: 13px;">🚶</span>
+        <span style="color: #00e5ff; font-weight: 900;">인도 ${displayDist}</span>
+        <span style="color: #46ffb8;">도보 ${displayTime}</span>
+        ${displayEta ? `<span style="color: #849396;">·</span><span style="color: #ffffff; background: rgba(0, 229, 255, 0.2); padding: 1px 6px; border-radius: 6px; border: 1px solid rgba(0, 229, 255, 0.4);">⏰ ${displayEta} 도착</span>` : ''}
+      </div>
+    `;
+
+    const routeBadge = new kakao.maps.CustomOverlay({
+      position: new kakao.maps.LatLng(midCoord[0], midCoord[1]),
+      content: badgeDiv,
+      xAnchor: 0.5,
+      yAnchor: 0.5,
+      zIndex: 260,
+    });
+    routeBadge.setMap(map);
+    kakaoRouteBadgeRef.current = routeBadge;
 
     // 1km (1,000m) Radius Circle
     if (kakaoCircleRef.current) {
@@ -298,13 +362,12 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
     kakaoCircle.setMap(map);
     kakaoCircleRef.current = kakaoCircle;
 
-    // Fit Bounds
+    // Fit Bounds along actual walk route
     const bounds = new kakao.maps.LatLngBounds();
-    bounds.extend(new kakao.maps.LatLng(userLocation.lat, userLocation.lng));
-    bounds.extend(new kakao.maps.LatLng(selectedRestroom.lat, selectedRestroom.lng));
+    routePoints.forEach(([lat, lng]) => bounds.extend(new kakao.maps.LatLng(lat, lng)));
     const [pt, pr, pb, pl] = isNavigating ? [140, 40, 220, 40] : [90, 90, 90, 90];
     map.setBounds(bounds, pt, pr, pb, pl);
-  }, [engine, isKakaoReady, userLocation, candidateRestrooms, selectedRestroom, onSelectRestroom, isNavigating]);
+  }, [engine, isKakaoReady, userLocation, candidateRestrooms, selectedRestroom, onSelectRestroom, isNavigating, walkRoute]);
 
   // -------------------------------------------------------------
   // 4. LEAFLET MAP INITIALIZATION (FULL SCREEN & IMMEDIATE)
@@ -406,10 +469,14 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       let markerHtml = '';
 
       if (isSelected) {
+        const distLabel = walkRoute ? `인도 ${walkRoute.distance_meters}m` : `${r.distance_meters}m`;
+        const timeLabel = walkRoute ? `${walkRoute.walking_time_min}분` : `${r.walking_time_min}분`;
+        const etaLabel = walkRoute?.eta_time_string ? ` · ${walkRoute.eta_time_string} 도착` : '';
+
         markerHtml = `
           <div style="display:flex; flex-direction:column; align-items:center; transform:translate(-50%, -100%); cursor:pointer;">
-            <div style="display:flex; align-items:center; gap:4px; background:#00e5ff; color:#00363d; padding:4px 10px; border-radius:9999px; box-shadow:0 0 20px rgba(0,229,255,0.9); font-family:'Space Grotesk',sans-serif; font-size:13px; font-weight:800; white-space:nowrap; border:1.5px solid #ffffff;">
-              <span>⚡ ${r.distance_meters}m · ${r.walking_time_min}분</span>
+            <div style="display:flex; align-items:center; gap:4px; background:#00e5ff; color:#00363d; padding:4px 10px; border-radius:9999px; box-shadow:0 0 20px rgba(0,229,255,0.9); font-family:'Space Grotesk',sans-serif; font-size:12px; font-weight:800; white-space:nowrap; border:1.5px solid #ffffff;">
+              <span>⚡ ${distLabel} · ${timeLabel}${etaLabel}</span>
             </div>
             <div style="width:0; height:0; border-left:6px solid transparent; border-right:6px solid transparent; border-top:6px solid #00e5ff; margin-bottom:1px;"></div>
             
@@ -454,26 +521,77 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       marker.addTo(markersLayer);
     });
 
-    // Polyline
+    // Clear existing polylines & badges
+    if (leafletRouteGlowRef.current) {
+      leafletRouteGlowRef.current.remove();
+      leafletRouteGlowRef.current = null;
+    }
     if (leafletRouteRef.current) {
       leafletRouteRef.current.remove();
+      leafletRouteRef.current = null;
+    }
+    if (leafletRouteBadgeRef.current) {
+      leafletRouteBadgeRef.current.remove();
+      leafletRouteBadgeRef.current = null;
     }
 
-    const routeLatlngs: [number, number][] = [
-      [userLocation.lat, userLocation.lng],
-      [
-        (userLocation.lat + selectedRestroom.lat) / 2 + 0.00004,
-        (userLocation.lng + selectedRestroom.lng) / 2,
-      ],
-      [selectedRestroom.lat, selectedRestroom.lng],
-    ];
+    const routeLatlngs: [number, number][] =
+      walkRoute?.coordinates && walkRoute.coordinates.length > 1
+        ? walkRoute.coordinates
+        : [
+            [userLocation.lat, userLocation.lng],
+            [
+              (userLocation.lat + selectedRestroom.lat) / 2 + 0.00004,
+              (userLocation.lng + selectedRestroom.lng) / 2,
+            ],
+            [selectedRestroom.lat, selectedRestroom.lng],
+          ];
 
-    leafletRouteRef.current = L.polyline(routeLatlngs, {
+    // 1) Outer Neon Glow Polyline
+    leafletRouteGlowRef.current = L.polyline(routeLatlngs, {
       color: '#00e5ff',
-      weight: isNavigating ? 8 : 5,
-      opacity: 0.95,
+      weight: isNavigating ? 14 : 10,
+      opacity: 0.35,
       lineCap: 'round',
       lineJoin: 'round',
+    }).addTo(map);
+
+    // 2) Primary Walkable Sidewalk Polyline
+    leafletRouteRef.current = L.polyline(routeLatlngs, {
+      color: '#00e5ff',
+      weight: isNavigating ? 7 : 5,
+      opacity: 0.98,
+      lineCap: 'round',
+      lineJoin: 'round',
+    }).addTo(map);
+
+    // 3) Floating Walk Route Info Badge on Map Midpoint
+    const midIdx = Math.floor(routeLatlngs.length / 2);
+    const midCoord = routeLatlngs[midIdx] || [userLocation.lat, userLocation.lng];
+    const displayDist = walkRoute ? `${walkRoute.distance_meters}m` : `${selectedRestroom.distance_meters}m`;
+    const displayTime = walkRoute ? `${walkRoute.walking_time_min}분` : `${selectedRestroom.walking_time_min}분`;
+    const displayEta = walkRoute?.eta_time_string || '';
+
+    const badgeHtml = `
+      <div style="background: rgba(10, 14, 19, 0.94); border: 1.5px solid #00e5ff; box-shadow: 0 0 16px rgba(0, 229, 255, 0.8), 0 4px 12px rgba(0,0,0,0.8); border-radius: 9999px; padding: 4px 10px; color: #ffffff; font-family: 'Space Grotesk', sans-serif; font-size: 11px; font-weight: 800; display: flex; align-items: center; gap: 6px; white-space: nowrap; pointer-events: none; transform: translate(-50%, -50%);">
+        <span style="font-size: 13px;">🚶</span>
+        <span style="color: #00e5ff; font-weight: 900;">인도 ${displayDist}</span>
+        <span style="color: #46ffb8;">도보 ${displayTime}</span>
+        ${displayEta ? `<span style="color: #849396;">·</span><span style="color: #ffffff; background: rgba(0, 229, 255, 0.2); padding: 1px 6px; border-radius: 6px; border: 1px solid rgba(0, 229, 255, 0.4);">⏰ ${displayEta} 도착</span>` : ''}
+      </div>
+    `;
+
+    const badgeIcon = L.divIcon({
+      className: 'leaflet-route-badge',
+      html: badgeHtml,
+      iconSize: [0, 0],
+      iconAnchor: [0, 0],
+    });
+
+    leafletRouteBadgeRef.current = L.marker([midCoord[0], midCoord[1]], {
+      icon: badgeIcon,
+      interactive: false,
+      zIndexOffset: 800,
     }).addTo(map);
 
     // 1km (1,000m) Radius Circle
@@ -490,14 +608,11 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       fillOpacity: 0.03,
     }).addTo(map);
 
-    // Auto bounds fitting
-    const bounds = L.latLngBounds([
-      [userLocation.lat, userLocation.lng],
-      [selectedRestroom.lat, selectedRestroom.lng],
-    ]);
+    // Auto bounds fitting along actual walk route
+    const bounds = L.latLngBounds(routeLatlngs);
     const paddingVal: [number, number] = isNavigating ? [140, 40] : [90, 90];
     map.fitBounds(bounds, { padding: paddingVal, maxZoom: isNavigating ? 19 : 18 });
-  }, [engine, userLocation, candidateRestrooms, selectedRestroom, onSelectRestroom, isNavigating]);
+  }, [engine, userLocation, candidateRestrooms, selectedRestroom, onSelectRestroom, isNavigating, walkRoute]);
 
   // Recenter handler
   const handleRecenter = useCallback(() => {

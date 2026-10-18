@@ -19,6 +19,7 @@ import { IndoorWalkthroughModal } from './components/IndoorWalkthroughModal';
 import { SettingsModal } from './components/SettingsModal';
 import { speakKoreanTTS, stopSpeech, playHapticChime, initVoices } from './utils/speech';
 import { getCurrentGpsPosition, reverseGeocodeKorean } from './utils/geolocation';
+import { useWalkingRoute } from './utils/walkingRoute';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'radar' | 'nav'>('radar');
@@ -29,6 +30,9 @@ export default function App() {
   const [urgencyLevel, setUrgencyLevel] = useState<UrgencyLevel>('extreme');
   const [candidateRestrooms, setCandidateRestrooms] = useState<RestroomCandidate[]>(CANDIDATE_RESTROOMS);
   const [selectedRestroom, setSelectedRestroom] = useState<RestroomCandidate>(CANDIDATE_RESTROOMS[0]);
+
+  // Real-time Walkable Sidewalk Route & ETA
+  const { walkRoute, isLoading: isRouteLoading } = useWalkingRoute(userLocation, selectedRestroom);
 
   // Kakao App Key from environment variables (VITE_KAKAO_MAP_API_KEY) or localStorage
   const [kakaoAppKey, setKakaoAppKey] = useState<string>(() => {
@@ -69,6 +73,24 @@ export default function App() {
     step_instruction: '50m 직진 후 회전문 통과, 로비 우측 복도로 진입하세요.',
     ui_action: 'START_NAV',
   });
+
+  // Sync walking route distance and ETA with voice assistant messages
+  useEffect(() => {
+    if (walkRoute) {
+      const firstStep =
+        walkRoute.steps?.[0]?.instruction ||
+        `${selectedRestroom.name} 방면으로 이동하세요.`;
+      setStepInstruction(firstStep);
+      setVoiceTtsMessage(
+        `${selectedRestroom.name}까지 실제 인도 보행 거리는 ${walkRoute.distance_meters}m이며, 약 ${walkRoute.walking_time_min}분 후 ${walkRoute.eta_time_string}에 도착 예정입니다.`
+      );
+    }
+  }, [
+    walkRoute?.distance_meters,
+    walkRoute?.eta_time_string,
+    selectedRestroom.id,
+    selectedRestroom.name,
+  ]);
 
   // Modals
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
@@ -438,6 +460,8 @@ export default function App() {
             onRefreshNearby={() =>
               fetchNearbyRestrooms(userLocation.lat, userLocation.lng, false)
             }
+            walkRoute={walkRoute}
+            isRouteLoading={isRouteLoading}
           />
         ) : (
           <LiveNavScreen
@@ -447,6 +471,7 @@ export default function App() {
             onExitNav={handleExitNavigation}
             onReroute={handleReroute}
             onOpenIndoorWalkthrough={() => setIsIndoorModalOpen(true)}
+            walkRoute={walkRoute}
           />
         )}
 

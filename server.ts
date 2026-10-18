@@ -506,6 +506,173 @@ app.post('/api/config/restroom-api', (req: Request, res: Response) => {
   });
 });
 
+// Pedestrian Walk Route Cache (15 min TTL)
+const walkRouteCache = new Map<string, { data: any; expiry: number }>();
+
+function formatKoreanEta(targetDate: Date): { etaText: string; etaTimeString: string } {
+  const hours = targetDate.getHours();
+  const minutes = targetDate.getMinutes();
+  const period = hours < 12 ? '오전' : '오후';
+  const displayHours = hours % 12 === 0 ? 12 : hours % 12;
+  const padMin = String(minutes).padStart(2, '0');
+  const etaTimeString = `${displayHours}:${padMin}`;
+  const etaText = `${period} ${displayHours}:${padMin} 도착 예정`;
+  return { etaText, etaTimeString };
+}
+
+// Generate realistic road/sidewalk grid route as fallback
+function generateFallbackWalkPath(
+  startLat: number,
+  startLng: number,
+  endLat: number,
+  endLng: number
+): [number, number][] {
+  const midLat = startLat + (endLat - startLat) * 0.45;
+  const midLng = startLng + (endLng - startLng) * 0.55;
+  return [
+    [startLat, startLng],
+    [midLat, startLng],
+    [midLat, midLng],
+    [endLat, midLng],
+    [endLat, endLng],
+  ];
+}
+
+// Actual Pedestrian Walking Route API (OSRM Foot Routing)
+app.get('/api/route/walk', async (req: Request, res: Response) => {
+  const startLat = parseFloat(String(req.query.startLat));
+  const startLng = parseFloat(String(req.query.startLng));
+  const endLat = parseFloat(String(req.query.endLat));
+  const endLng = parseFloat(String(req.query.endLng));
+
+  if (isNaN(startLat) || isNaN(startLng) || isNaN(endLat) || isNaN(endLng)) {
+    return res.status(400).json({ error: 'Invalid coordinates' });
+  }
+
+  const cacheKey = `${startLat.toFixed(5)},${startLng.toFixed(5)}_${endLat.toFixed(5)},${endLng.toFixed(5)}`;
+  const cached = walkRouteCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiry > now) {
+    // Refresh ETA time against current timestamp
+    const targetDate = new Date(now + cached.data.walking_time_min * 60 * 1000);
+    const { etaText, etaTimeString } = formatKoreanEta(targetDate);
+    return res.json({
+      ...cached.data,
+      eta_text: etaText,
+      eta_time_string: etaTimeString,
+    });
+  }
+
+  try {
+    const osrmUrl = `https://router.project-osrm.org/route/v1/foot/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson&steps=true`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+
+    const osrmResp = await fetch(osrmUrl, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'OhCrapNavi-PedestrianRouter/1.0' },
+    });
+    clearTimeout(timeout);
+
+    if (osrmResp.ok) {
+      const data = await osrmResp.json();
+      if (data.code === 'Ok' && Array.isArray(data.routes) && data.routes.length > 0) {
+        const route = data.routes[0];
+        // Coordinates in GeoJSON are [lng, lat] -> convert to [lat, lng] for Leaflet/Kakao
+        const coordinates: [number, number][] = route.geometry.coordinates.map(
+          (c: [number, number]) => [Number(c[1].toFixed(6)), Number(c[0].toFixed(6))]
+        );
+
+        const distanceMeters = Math.max(15, Math.round(route.distance));
+        // Pedestrian brisk/urgency speed: ~75-80m/min
+        const walkingTimeMin = Math.max(1, Math.ceil(distanceMeters / 75));
+        const durationSeconds = Math.round(route.duration || walkingTimeMin * 60);
+
+        const targetDate = new Date(now + walkingTimeMin * 60 * 1000);
+        const { etaText, etaTimeString } = formatKoreanEta(targetDate);
+
+        // Parse turn-by-turn steps
+        const steps = (route.legs?.[0]?.steps || []).map((s: any) => {
+          const maneuverType = s.maneuver?.type || 'depart';
+          const modifier = s.maneuver?.modifier || '';
+          const streetName = s.name ? `${s.name} 방면` : '인도/보행로';
+          let directionText = '직진';
+          if (modifier.includes('left')) directionText = '좌회전';
+          else if (modifier.includes('right')) directionText = '우회전';
+
+          let instruction = `${streetName}으로 ${Math.round(s.distance)}m 이동`;
+          if (maneuverType === 'depart') {
+            instruction = `${streetName} 따라 출발 (${Math.round(s.distance)}m)`;
+          } else if (maneuverType === 'turn') {
+            instruction = `${directionText} 후 ${streetName} 따라 ${Math.round(s.distance)}m 직진`;
+          }
+
+          return {
+            instruction,
+            distance_meters: Math.round(s.distance),
+            duration_seconds: Math.round(s.duration || 10),
+            direction: modifier || maneuverType,
+            name: s.name || '',
+          };
+        });
+
+        const resultPayload = {
+          success: true,
+          distance_meters: distanceMeters,
+          walking_time_min: walkingTimeMin,
+          duration_seconds: durationSeconds,
+          eta_text: etaText,
+          eta_time_string: etaTimeString,
+          coordinates,
+          steps,
+          isFallback: false,
+        };
+
+        walkRouteCache.set(cacheKey, { data: resultPayload, expiry: now + 15 * 60 * 1000 });
+        return res.json(resultPayload);
+      }
+    }
+  } catch (err) {
+    console.warn('OSRM walk routing error (using fallback sidewalk path):', err);
+  }
+
+  // Fallback: Calculate straight Haversine and generate grid sidewalk steps
+  const directMeters = computeHaversineMeters(startLat, startLng, endLat, endLng);
+  // Realistic urban walking detour factor (~1.25x - 1.35x)
+  const walkingMeters = Math.round(directMeters * 1.3);
+  const walkingTimeMin = Math.max(1, Math.ceil(walkingMeters / 75));
+  const targetDate = new Date(now + walkingTimeMin * 60 * 1000);
+  const { etaText, etaTimeString } = formatKoreanEta(targetDate);
+  const coordinates = generateFallbackWalkPath(startLat, startLng, endLat, endLng);
+
+  const fallbackPayload = {
+    success: true,
+    distance_meters: walkingMeters,
+    walking_time_min: walkingTimeMin,
+    duration_seconds: walkingTimeMin * 60,
+    eta_text: etaText,
+    eta_time_string: etaTimeString,
+    coordinates,
+    steps: [
+      {
+        instruction: `인도 따라 ${Math.round(walkingMeters * 0.5)}m 직진`,
+        distance_meters: Math.round(walkingMeters * 0.5),
+        duration_seconds: Math.round(walkingTimeMin * 30),
+        direction: 'straight',
+      },
+      {
+        instruction: '횡단보도 및 코너 통과 후 목적지 방면 진입',
+        distance_meters: Math.round(walkingMeters * 0.5),
+        duration_seconds: Math.round(walkingTimeMin * 30),
+        direction: 'turn_right',
+      },
+    ],
+    isFallback: true,
+  };
+
+  return res.json(fallbackPayload);
+});
+
 // FlushPulse Assistant API Route
 app.post('/api/flushpulse/assist', async (req: Request, res: Response) => {
   try {
