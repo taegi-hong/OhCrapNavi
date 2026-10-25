@@ -34,6 +34,8 @@ export const TOILET_ICON_SVG = `
 </svg>
 `;
 
+type MapTheme = 'modern' | 'dark' | 'satellite';
+
 export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
   userLocation,
   candidateRestrooms,
@@ -50,6 +52,7 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
 
   const [engine, setEngine] = useState<'kakao' | 'leaflet'>('leaflet');
   const [isKakaoReady, setIsKakaoReady] = useState(false);
+  const [mapTheme, setMapTheme] = useState<MapTheme>('modern');
 
   // References for Kakao Maps JS SDK
   const kakaoMapRef = useRef<any>(null);
@@ -62,9 +65,11 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
 
   // References for Leaflet engine
   const leafletMapRef = useRef<L.Map | null>(null);
+  const leafletTileLayerRef = useRef<L.TileLayer | null>(null);
   const leafletMarkersRef = useRef<L.LayerGroup | null>(null);
   const leafletRouteRef = useRef<L.Polyline | null>(null);
   const leafletRouteGlowRef = useRef<L.Polyline | null>(null);
+  const leafletRouteFlowRef = useRef<L.Polyline | null>(null);
   const leafletRouteBadgeRef = useRef<L.Marker | null>(null);
   const leafletUserMarkerRef = useRef<L.Marker | null>(null);
   const leafletCircleRef = useRef<L.Circle | null>(null);
@@ -106,7 +111,7 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
 
     const script = document.createElement('script');
     script.id = scriptId;
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${cleanKey}&autoload=false&libraries=services,clusterer`;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${cleanKey}&autoload=false&libraries=services,clusterer,drawing`;
     script.async = true;
 
     script.onload = () => {
@@ -369,6 +374,34 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
     map.setBounds(bounds, pt, pr, pb, pl);
   }, [engine, isKakaoReady, userLocation, candidateRestrooms, selectedRestroom, onSelectRestroom, isNavigating, walkRoute]);
 
+  // Helper for ultra-crisp modern map tile themes (clean, high resolution, no watermarks)
+  const getTileConfig = (theme: MapTheme) => {
+    switch (theme) {
+      case 'dark':
+        // Esri Dark Gray Canvas - Sleek Cyberpunk Night Map
+        return {
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+          subdomains: ['a', 'b', 'c', 'd'],
+          maxZoom: 19,
+        };
+      case 'satellite':
+        // Esri World Imagery - Ultra HD Satellite Map
+        return {
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          subdomains: ['a', 'b', 'c', 'd'],
+          maxZoom: 19,
+        };
+      case 'modern':
+      default:
+        // Modern High-Contrast Vector Style Humanitarian OSM (Korean POIs, roads, buildings)
+        return {
+          url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+          subdomains: ['a', 'b'],
+          maxZoom: 19,
+        };
+    }
+  };
+
   // -------------------------------------------------------------
   // 4. LEAFLET MAP INITIALIZATION (FULL SCREEN & IMMEDIATE)
   // -------------------------------------------------------------
@@ -386,11 +419,12 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
         preferCanvas: true,
       });
 
-      // High-speed, crystal clear OpenStreetMap & Carto Voyager tiles
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        subdomains: ['a', 'b', 'c'],
+      const tileCfg = getTileConfig(mapTheme);
+      leafletTileLayerRef.current = L.tileLayer(tileCfg.url, {
+        maxZoom: tileCfg.maxZoom,
+        subdomains: tileCfg.subdomains,
         crossOrigin: true,
+        detectRetina: true,
       }).addTo(map);
 
       leafletMarkersRef.current = L.layerGroup().addTo(map);
@@ -418,6 +452,29 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       leafletMapRef.current.invalidateSize();
     }
   }, [engine, isKakaoReady]);
+
+  // Dynamic Theme Switching (Modern HD / Dark Cyber / Satellite)
+  useEffect(() => {
+    if (engine === 'kakao' && kakaoMapRef.current && (window as any).kakao?.maps) {
+      const kakao = (window as any).kakao;
+      if (mapTheme === 'satellite') {
+        kakaoMapRef.current.setMapTypeId(kakao.maps.MapTypeId.HYBRID);
+      } else {
+        kakaoMapRef.current.setMapTypeId(kakao.maps.MapTypeId.ROADMAP);
+      }
+    } else if (engine === 'leaflet' && leafletMapRef.current) {
+      if (leafletTileLayerRef.current) {
+        leafletTileLayerRef.current.remove();
+      }
+      const tileCfg = getTileConfig(mapTheme);
+      leafletTileLayerRef.current = L.tileLayer(tileCfg.url, {
+        maxZoom: tileCfg.maxZoom,
+        subdomains: tileCfg.subdomains,
+        crossOrigin: true,
+        detectRetina: true,
+      }).addTo(leafletMapRef.current);
+    }
+  }, [mapTheme, engine]);
 
   // -------------------------------------------------------------
   // 5. LEAFLET MARKERS & ROUTE UPDATE (WITH TOILET ICONS)
@@ -530,6 +587,10 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       leafletRouteRef.current.remove();
       leafletRouteRef.current = null;
     }
+    if (leafletRouteFlowRef.current) {
+      leafletRouteFlowRef.current.remove();
+      leafletRouteFlowRef.current = null;
+    }
     if (leafletRouteBadgeRef.current) {
       leafletRouteBadgeRef.current.remove();
       leafletRouteBadgeRef.current = null;
@@ -565,7 +626,18 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
       lineJoin: 'round',
     }).addTo(map);
 
-    // 3) Floating Walk Route Info Badge on Map Midpoint
+    // 3) Animated Flow Pulse Polyline (Directional Live Navigation)
+    leafletRouteFlowRef.current = L.polyline(routeLatlngs, {
+      color: '#ffffff',
+      weight: 3.5,
+      opacity: 0.95,
+      dashArray: '8, 12',
+      className: 'walk-route-flow',
+      lineCap: 'round',
+      lineJoin: 'round',
+    }).addTo(map);
+
+    // 4) Floating Walk Route Info Badge on Map Midpoint
     const midIdx = Math.floor(routeLatlngs.length / 2);
     const midCoord = routeLatlngs[midIdx] || [userLocation.lat, userLocation.lng];
     const displayDist = walkRoute ? `${walkRoute.distance_meters}m` : `${selectedRestroom.distance_meters}m`;
@@ -627,6 +699,27 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
     }
   }, [engine, userLocation]);
 
+  // Zoom handlers (supports both Kakao and modern Leaflet)
+  const handleZoomIn = useCallback(() => {
+    playHapticChime('click');
+    if (engine === 'kakao' && kakaoMapRef.current) {
+      const currentLevel = kakaoMapRef.current.getLevel();
+      kakaoMapRef.current.setLevel(Math.max(1, currentLevel - 1), { animate: true });
+    } else if (leafletMapRef.current) {
+      leafletMapRef.current.zoomIn();
+    }
+  }, [engine]);
+
+  const handleZoomOut = useCallback(() => {
+    playHapticChime('click');
+    if (engine === 'kakao' && kakaoMapRef.current) {
+      const currentLevel = kakaoMapRef.current.getLevel();
+      kakaoMapRef.current.setLevel(Math.min(14, currentLevel + 1), { animate: true });
+    } else if (leafletMapRef.current) {
+      leafletMapRef.current.zoomOut();
+    }
+  }, [engine]);
+
   // Kakao Navi Scheme / Web launch
   const handleLaunchKakaoNavi = () => {
     playHapticChime('click');
@@ -648,7 +741,7 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
         style={{ minHeight: '100%', minWidth: '100%' }}
       />
 
-      {/* 2. Full-Screen Map Canvas (Crystal clear Korean map with toilet markers) */}
+      {/* 2. Full-Screen Map Canvas (Ultra-crisp modern HD map with toilet markers) */}
       <div
         ref={leafletContainerRef}
         id="leaflet-fallback-container"
@@ -658,51 +751,79 @@ export const KakaoMapView: React.FC<KakaoMapViewProps> = ({
         style={{ minHeight: '100%', minWidth: '100%' }}
       />
 
-      {/* 3. Sleek Floating Mode Tag (Public Restroom API & 1km Radius Status) */}
-      <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#0a0e13]/85 backdrop-blur-md border border-[#31353b]/80 shadow-lg pointer-events-none">
-        <div
-          className={`w-2 h-2 rounded-full ${
-            engine === 'kakao'
-              ? 'bg-[#fee500] shadow-[0_0_8px_#fee500] animate-pulse'
-              : 'bg-[#46ffb8] shadow-[0_0_8px_#46ffb8] animate-pulse'
+      {/* Map Theme Switcher Pill (Top-Left, comfortably below top navigation HUD) */}
+      <div className="absolute left-3 top-[112px] z-20 flex items-center bg-[#0a0e13]/92 backdrop-blur-xl border border-white/10 rounded-full p-1 shadow-[0_4px_16px_rgba(0,0,0,0.6)]">
+        <button
+          onClick={() => {
+            playHapticChime('click');
+            setMapTheme('modern');
+          }}
+          className={`px-2.5 py-1 text-[11px] font-bold rounded-full transition-all cursor-pointer ${
+            mapTheme === 'modern'
+              ? 'bg-[#00e5ff] text-[#00272e] shadow-[0_0_10px_rgba(0,229,255,0.7)]'
+              : 'text-slate-300 hover:text-white'
           }`}
-        />
-        <span className="font-['Space_Grotesk'] text-[11px] font-bold text-[#e0e2ea] flex items-center gap-1">
-          <span>{engine === 'kakao' ? '카카오맵 SDK' : '실시간 공중화장실 API'}</span>
-          <span className="text-[#00e5ff]">· 반경 1km ({candidateRestrooms.length}곳) 🚻</span>
-        </span>
+          title="카카오/모던 벡터 HD 지도"
+        >
+          모던 HD
+        </button>
+        <button
+          onClick={() => {
+            playHapticChime('click');
+            setMapTheme('dark');
+          }}
+          className={`px-2.5 py-1 text-[11px] font-bold rounded-full transition-all cursor-pointer ${
+            mapTheme === 'dark'
+              ? 'bg-[#00e5ff] text-[#00272e] shadow-[0_0_10px_rgba(0,229,255,0.7)]'
+              : 'text-slate-300 hover:text-white'
+          }`}
+          title="사이버 다크 야간 지도"
+        >
+          다크
+        </button>
+        <button
+          onClick={() => {
+            playHapticChime('click');
+            setMapTheme('satellite');
+          }}
+          className={`px-2.5 py-1 text-[11px] font-bold rounded-full transition-all cursor-pointer ${
+            mapTheme === 'satellite'
+              ? 'bg-[#00e5ff] text-[#00272e] shadow-[0_0_10px_rgba(0,229,255,0.7)]'
+              : 'text-slate-300 hover:text-white'
+          }`}
+          title="고해상도 위성 지도"
+        >
+          위성
+        </button>
       </div>
 
-      {/* 4. Floating Quick Action Controls (Right side) */}
-      <div className="absolute right-3 top-20 flex flex-col gap-2.5 z-20">
-        {/* Recenter button */}
+      {/* Modern Zoom & Recenter Control Stack (Top-Right, comfortably below top HUD) */}
+      <div className="absolute right-3 top-[112px] z-20 flex flex-col items-center bg-[#0a0e13]/92 backdrop-blur-xl border border-white/10 rounded-2xl p-1 shadow-[0_4px_16px_rgba(0,0,0,0.6)] gap-1">
+        <button
+          onClick={handleZoomIn}
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-white/80 hover:text-[#00e5ff] hover:bg-white/5 active:scale-90 transition-all cursor-pointer"
+          title="지도 확대"
+          aria-label="확대"
+        >
+          <span className="material-symbols-outlined text-[18px]">add</span>
+        </button>
+        <div className="w-4 h-[1px] bg-white/10" />
+        <button
+          onClick={handleZoomOut}
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-white/80 hover:text-[#00e5ff] hover:bg-white/5 active:scale-90 transition-all cursor-pointer"
+          title="지도 축소"
+          aria-label="축소"
+        >
+          <span className="material-symbols-outlined text-[18px]">remove</span>
+        </button>
+        <div className="w-4 h-[1px] bg-white/10" />
         <button
           onClick={handleRecenter}
-          className="w-11 h-11 rounded-full bg-[#1c2025]/90 border border-[#3b494c] text-[#00e5ff] backdrop-blur-md flex items-center justify-center shadow-2xl active:scale-90 transition-transform cursor-pointer hover:border-[#00e5ff]"
-          title="내 위치로 지도 이동"
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-[#00e5ff] hover:bg-[#00e5ff]/10 active:scale-90 transition-all cursor-pointer"
+          title="내 위치로 이동"
           aria-label="내 위치 이동"
         >
-          <span className="material-symbols-outlined text-[22px]">my_location</span>
-        </button>
-
-        {/* Kakao Navi direct launch button */}
-        <button
-          onClick={handleLaunchKakaoNavi}
-          className="w-11 h-11 rounded-full bg-[#fee500] text-[#191919] backdrop-blur-md flex items-center justify-center shadow-2xl active:scale-90 transition-transform cursor-pointer border border-[#e6cf00] font-black"
-          title="카카오맵/카카오내비 길찾기 바로가기"
-          aria-label="카카오내비 길찾기"
-        >
-          <span className="font-['Space_Grotesk'] text-[16px] font-black leading-none">K</span>
-        </button>
-
-        {/* Settings Button */}
-        <button
-          onClick={() => onOpenSettings?.()}
-          className="w-11 h-11 rounded-full bg-[#1c2025]/90 border border-[#3b494c] text-[#fee500] backdrop-blur-md flex items-center justify-center shadow-2xl active:scale-90 transition-transform cursor-pointer hover:border-[#fee500]"
-          title="앱 설정 및 카카오 키 관리"
-          aria-label="설정"
-        >
-          <span className="material-symbols-outlined text-[20px]">tune</span>
+          <span className="material-symbols-outlined text-[18px]">my_location</span>
         </button>
       </div>
     </div>

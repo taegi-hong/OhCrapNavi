@@ -68,8 +68,40 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [showRecommendModal, setShowRecommendModal] = useState(false);
+  const [recommendSortTab, setRecommendSortTab] = useState<'smart' | 'clean' | 'distance'>('smart');
   const [navStepIndex, setNavStepIndex] = useState(0);
   const [isNavMuted, setIsNavMuted] = useState(false);
+  const [isCardCollapsed, setIsCardCollapsed] = useState(false);
+
+  // Top 5 cleanest & closest restrooms calculation
+  const topRecommendedRestrooms = React.useMemo(() => {
+    const list = [...candidateRestrooms];
+    if (recommendSortTab === 'clean') {
+      return list
+        .sort((a, b) => (b.cleanliness_score || 0) - (a.cleanliness_score || 0) || a.distance_meters - b.distance_meters)
+        .slice(0, 5);
+    } else if (recommendSortTab === 'distance') {
+      return list.sort((a, b) => a.distance_meters - b.distance_meters).slice(0, 5);
+    } else {
+      // Smart balance: high cleanliness + close distance + open status
+      return list
+        .sort((a, b) => {
+          const scoreA =
+            (a.cleanliness_score || 4.0) * 16 -
+            (a.distance_meters / 15) +
+            (a.is_open ? 8 : 0) +
+            (!a.has_password ? 4 : 0);
+          const scoreB =
+            (b.cleanliness_score || 4.0) * 16 -
+            (b.distance_meters / 15) +
+            (b.is_open ? 8 : 0) +
+            (!b.has_password ? 4 : 0);
+          return scoreB - scoreA;
+        })
+        .slice(0, 5);
+    }
+  }, [candidateRestrooms, recommendSortTab]);
 
   // Real pedestrian distance and walking time
   const walkDist = walkRoute ? walkRoute.distance_meters : selectedRestroom.distance_meters;
@@ -247,120 +279,87 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
         ) : (
           /* Normal HUD when exploring map */
           <>
-            <div className="flex items-center justify-between gap-2 pointer-events-auto max-w-4xl mx-auto w-full">
-              {/* GPS Info Badge */}
-              <div className="flex items-center gap-1.5 bg-[#0a0e13]/90 border border-[#31353b] backdrop-blur-xl px-3 py-1.5 rounded-full shadow-2xl">
+            {/* Minimalist Integrated Location & Status Chip (Leaves 100% of the map clear) */}
+            <div className="flex items-center justify-between gap-2 pointer-events-auto max-w-lg mx-auto w-full px-1">
+              <div className="flex items-center gap-2 bg-[#0a0e13]/90 border border-[#31353b]/90 backdrop-blur-xl px-3 py-1.5 rounded-full shadow-lg max-w-[calc(100%-44px)]">
+                {/* GPS Location & Accuracy */}
                 <button
                   onClick={() => {
                     playHapticChime('click');
                     onFetchGps();
                   }}
-                  className="flex items-center gap-1.5 cursor-pointer active:scale-95 transition-transform"
+                  className="flex items-center gap-1.5 cursor-pointer active:scale-95 transition-transform min-w-0"
                   title="GPS 갱신 (터치 시 재조회)"
                 >
                   {isGpsLoading ? (
-                    <span className="material-symbols-outlined text-[#00daf3] text-[16px] animate-spin">
+                    <span className="material-symbols-outlined text-[#00daf3] text-[15px] animate-spin">
                       sync
                     </span>
                   ) : (
                     <span
-                      className={`w-2 h-2 rounded-full ${
+                      className={`w-2 h-2 rounded-full flex-shrink-0 ${
                         userLocation.isLiveGps
                           ? 'bg-[#46ffb8] shadow-[0_0_8px_rgba(70,255,184,0.9)] animate-pulse'
                           : 'bg-[#00e5ff]'
                       }`}
                     />
                   )}
-                  <span className="material-symbols-outlined text-[#00daf3] text-[15px]">near_me</span>
-                  <span className="font-['Space_Grotesk'] text-[12px] font-bold text-[#e0e2ea] truncate max-w-[140px] sm:max-w-[220px]">
+                  <span className="material-symbols-outlined text-[#00daf3] text-[14px] flex-shrink-0">near_me</span>
+                  <span className="font-['Space_Grotesk'] text-[12px] font-bold text-[#e0e2ea] truncate max-w-[120px] sm:max-w-[200px]">
                     {userLocation.address}
                   </span>
-                  <span className="font-['JetBrains_Mono'] text-[10px] text-[#46ffb8] font-semibold hidden sm:inline">
-                    {formatCoordinates(userLocation.lat, userLocation.lng)}
-                  </span>
-                  <span className="font-['JetBrains_Mono'] text-[10px] text-[#849396] font-semibold">
+                  <span className="font-['JetBrains_Mono'] text-[9.5px] text-[#849396] font-semibold flex-shrink-0 hidden sm:inline">
                     {userLocation.accuracy}
                   </span>
                 </button>
 
-                {/* Location Switcher Trigger */}
-                <button
-                  onClick={() => setShowLocationPicker((prev) => !prev)}
-                  className="ml-1 w-6 h-6 rounded-full bg-[#1c2025] hover:bg-[#262a30] text-[#849396] hover:text-[#00daf3] flex items-center justify-center transition-colors cursor-pointer"
-                  title="위치 프리셋 변경"
-                >
-                  <span className="material-symbols-outlined text-[14px]">tune</span>
-                </button>
-              </div>
+                <span className="text-[#3b494c] flex-shrink-0">·</span>
 
-              {/* Right Action Group: Emergency Toggle & Voice STT Mic */}
-              <div className="flex items-center gap-2">
-                {/* Urgent Mode Toggle */}
-                <button
-                  onClick={() => {
-                    playHapticChime('emergency');
-                    onToggleUrgency();
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full shadow-2xl backdrop-blur-xl active:scale-95 transition-all duration-200 cursor-pointer ${
-                    isEmergency
-                      ? 'bg-[#df0042] text-[#fff1f1] shadow-[0_0_16px_rgba(223,0,66,0.6)]'
-                      : 'bg-[#1c2025]/90 text-[#e0e2ea] border border-[#3b494c]'
-                  }`}
-                >
-                  <span className={`material-symbols-outlined text-[15px] ${isEmergency ? 'animate-bounce' : ''}`}>
-                    {isEmergency ? 'bolt' : 'tune'}
-                  </span>
-                  <span className="font-['Space_Grotesk'] text-[11px] font-bold tracking-tight">
-                    {isEmergency ? '🚨 급똥모드 ON' : '일반모드'}
-                  </span>
-                </button>
-
-                {/* Voice STT Microphone Button */}
-                <button
-                  onClick={() => {
-                    playHapticChime('click');
-                    onOpenVoiceModal();
-                  }}
-                  className="w-9 h-9 rounded-full bg-[#00e5ff] text-[#00363d] flex items-center justify-center shadow-[0_0_16px_rgba(0,229,255,0.7)] active:scale-90 transition-transform cursor-pointer font-bold"
-                  title="AI 음성 검색 (STT)"
-                  aria-label="AI 음성 검색"
-                >
-                  <span className="material-symbols-outlined text-[19px]">mic</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Real-time Public Restroom 1km API Status Badge */}
-            <div className="flex items-center justify-between gap-2 pointer-events-auto max-w-4xl mx-auto w-full">
-              <div className="flex items-center gap-2 bg-[#0a0e13]/90 border border-[#00e5ff]/40 backdrop-blur-xl px-3 py-1 rounded-full shadow-2xl">
-                <span className="w-2 h-2 rounded-full bg-[#00e5ff] shadow-[0_0_8px_#00e5ff] animate-pulse" />
-                <span className="text-[11px] font-bold text-[#c3f5ff] flex items-center gap-1.5">
-                  <span className="text-[#00e5ff]">공중화장실 API</span>
-                  <span className="text-[#849396]">·</span>
-                  <span className="text-[#46ffb8]">반경 1km</span>
-                  <span className="text-[#e0e2ea] font-['Space_Grotesk'] font-extrabold">
-                    ({candidateRestrooms.length}곳 실시간)
+                {/* Restroom count */}
+                <span className="text-[11px] font-bold text-[#c3f5ff] flex items-center gap-1 flex-shrink-0">
+                  <span className="text-[#00e5ff]">1km</span>
+                  <span className="text-[#46ffb8] font-['Space_Grotesk'] font-extrabold">
+                    {candidateRestrooms.length}곳
                   </span>
                 </span>
+
+                {/* Refresh API button */}
                 <button
                   onClick={() => {
                     playHapticChime('click');
                     onRefreshNearby?.();
                   }}
                   disabled={isRestroomApiLoading}
-                  className="ml-1 flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#1c2025] hover:bg-[#262a30] text-[#00daf3] hover:text-white text-[10px] font-semibold border border-[#31353b] cursor-pointer active:scale-95 transition-all"
+                  className="w-5 h-5 rounded-full bg-[#1c2025] hover:bg-[#262a30] text-[#00daf3] flex items-center justify-center cursor-pointer active:scale-95 transition-all flex-shrink-0"
                   title="반경 1km 공중화장실 실시간 재조회"
                 >
                   <span
-                    className={`material-symbols-outlined text-[13px] ${
+                    className={`material-symbols-outlined text-[12px] ${
                       isRestroomApiLoading ? 'animate-spin text-[#00e5ff]' : ''
                     }`}
                   >
                     sync
                   </span>
-                  <span>{isRestroomApiLoading ? '조회 중' : '재조회'}</span>
                 </button>
               </div>
+
+              {/* Top 5 Recommended Restroom List Trigger Button */}
+              <button
+                onClick={() => {
+                  playHapticChime('click');
+                  setShowRecommendModal((prev) => !prev);
+                  setShowLocationPicker(false);
+                }}
+                className={`h-8 px-2.5 rounded-full border backdrop-blur-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-lg active:scale-95 flex-shrink-0 ${
+                  showRecommendModal
+                    ? 'bg-[#00e5ff] text-[#00363d] border-white font-bold shadow-[0_0_12px_rgba(0,229,255,0.8)]'
+                    : 'bg-[#0a0e13]/90 border-[#31353b]/90 text-[#00daf3] hover:text-white hover:border-[#00e5ff]/50'
+                }`}
+                title="가장 가깝고 깨끗한 화장실 Top 5 추천"
+              >
+                <span className="material-symbols-outlined text-[15px] text-[#ffc107]">star</span>
+                <span className="text-[11.5px] font-['Space_Grotesk'] font-bold text-[#e0e2ea]">Top 5</span>
+              </button>
             </div>
 
             {/* GPS Error notice banner if any */}
@@ -381,7 +380,179 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
           </>
         )}
 
-        {/* Location Picker Modal */}
+        {/* Top 5 Closest & Cleanest Restrooms Modal */}
+        {showRecommendModal && (
+          <div className="max-w-md mx-auto w-full p-3.5 bg-[#1c2025]/98 backdrop-blur-2xl border border-[#31353b] rounded-2xl shadow-2xl flex flex-col gap-2.5 pointer-events-auto animate-in fade-in duration-150 max-h-[75vh] overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#31353b]/70 pb-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-base">✨</span>
+                <span className="font-['Space_Grotesk'] text-[13.5px] font-bold text-[#e0e2ea]">
+                  가장 가깝고 깨끗한 화장실 Top 5
+                </span>
+              </div>
+              <button
+                onClick={() => setShowRecommendModal(false)}
+                className="w-6 h-6 rounded-md bg-[#262a30] hover:bg-[#31353b] text-[#849396] hover:text-white flex items-center justify-center cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Filter Tabs (Smart, Clean, Distance) */}
+            <div className="flex items-center gap-1 bg-[#101419]/90 p-1 rounded-xl border border-[#31353b]/60">
+              <button
+                onClick={() => {
+                  playHapticChime('click');
+                  setRecommendSortTab('smart');
+                }}
+                className={`flex-1 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                  recommendSortTab === 'smart'
+                    ? 'bg-[#00e5ff] text-[#00363d] shadow-sm'
+                    : 'text-[#849396] hover:text-[#e0e2ea]'
+                }`}
+              >
+                <span>⭐</span>
+                <span>종합 추천</span>
+              </button>
+              <button
+                onClick={() => {
+                  playHapticChime('click');
+                  setRecommendSortTab('clean');
+                }}
+                className={`flex-1 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                  recommendSortTab === 'clean'
+                    ? 'bg-[#00e5ff] text-[#00363d] shadow-sm'
+                    : 'text-[#849396] hover:text-[#e0e2ea]'
+                }`}
+              >
+                <span>🧼</span>
+                <span>청결 우선</span>
+              </button>
+              <button
+                onClick={() => {
+                  playHapticChime('click');
+                  setRecommendSortTab('distance');
+                }}
+                className={`flex-1 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                  recommendSortTab === 'distance'
+                    ? 'bg-[#00e5ff] text-[#00363d] shadow-sm'
+                    : 'text-[#849396] hover:text-[#e0e2ea]'
+                }`}
+              >
+                <span>⚡</span>
+                <span>최단 거리</span>
+              </button>
+            </div>
+
+            {/* Top 5 List */}
+            <div className="flex flex-col gap-1.5 overflow-y-auto no-scrollbar max-h-[48vh] pr-0.5">
+              {topRecommendedRestrooms.map((r, index) => {
+                const isSelected = r.id === selectedRestroom.id;
+                // Medal badges for top 3
+                const rankBadges = [
+                  'bg-gradient-to-r from-[#ffd700] to-[#ffaa00] text-[#3e2b00]',
+                  'bg-gradient-to-r from-[#e0e2ea] to-[#b0b3b8] text-[#1c2025]',
+                  'bg-gradient-to-r from-[#cd7f32] to-[#a05a2c] text-white',
+                  'bg-[#262a30] text-[#849396]',
+                  'bg-[#262a30] text-[#849396]',
+                ];
+
+                return (
+                  <button
+                    key={r.id}
+                    onClick={() => {
+                      playHapticChime('click');
+                      onSelectRestroom(r);
+                      setShowRecommendModal(false);
+                    }}
+                    className={`text-left p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
+                      isSelected
+                        ? 'bg-[#00e5ff]/15 border-[#00e5ff] shadow-[0_0_10px_rgba(0,229,255,0.4)]'
+                        : 'bg-[#101419]/70 border-[#31353b]/80 hover:bg-[#262a30] hover:border-[#00daf3]/50'
+                    }`}
+                  >
+                    {/* Left: Rank & Info */}
+                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                      {/* Rank Badge */}
+                      <span
+                        className={`text-[10px] font-black font-['Space_Grotesk'] w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5 shadow-sm ${
+                          rankBadges[index] || 'bg-[#262a30] text-[#849396]'
+                        }`}
+                      >
+                        {index + 1}
+                      </span>
+
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <h4 className="font-['Space_Grotesk'] text-[13.5px] font-bold text-[#e0e2ea] truncate leading-tight">
+                            {r.name}
+                          </h4>
+                          {r.is_open && (
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-[#00626e]/70 text-[#c3f5ff] flex-shrink-0">
+                              개방중
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-[11px] text-[#849396] truncate mt-0.5">
+                          {r.floor_or_location_details}
+                        </p>
+
+                        <div className="flex items-center gap-2 mt-1 text-[10.5px]">
+                          {/* Cleanliness score */}
+                          <span className="text-[#ffc107] font-bold flex items-center gap-0.5">
+                            <span>⭐</span>
+                            <span>{r.cleanliness_score ? r.cleanliness_score.toFixed(1) : '4.5'}</span>
+                            <span className="text-[9px] text-[#849396] ml-0.5">
+                              {r.cleanliness_score >= 4.8 ? '(매우 청결)' : r.cleanliness_score >= 4.5 ? '(청결)' : ''}
+                            </span>
+                          </span>
+
+                          <span className="text-[#3b494c]">·</span>
+
+                          {/* Password info */}
+                          <span className={r.has_password ? 'text-[#e0e2ea]' : 'text-[#46ffb8] font-semibold'}>
+                            {r.has_password ? '🔑 비번' : '🔓 비번 없음'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right: Distance & Walk Time */}
+                    <div className="flex flex-col items-end flex-shrink-0">
+                      <span className="font-['Space_Grotesk'] text-[15px] font-black text-[#00e5ff] leading-none">
+                        {r.distance_meters}m
+                      </span>
+                      <span className="font-['Space_Grotesk'] text-[11px] font-bold text-[#46ffb8] mt-0.5">
+                        도보 {r.walking_time_min}분
+                      </span>
+                      <span className="text-[10px] text-[#00daf3] font-bold mt-1 px-1.5 py-0.5 rounded bg-[#00daf3]/10 border border-[#00daf3]/30">
+                        선택
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Footer Sub-action: Toggle Location preset for testing if needed */}
+            <div className="pt-1 border-t border-[#31353b]/50 flex items-center justify-between text-[10px] text-[#849396]">
+              <span>💡 실시간 거리 및 청결 평점 기반 순위</span>
+              <button
+                onClick={() => {
+                  setShowLocationPicker(true);
+                  setShowRecommendModal(false);
+                }}
+                className="hover:text-[#00daf3] underline cursor-pointer"
+              >
+                위치 테스트 프리셋
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Location Picker Modal (Kept for testing/presets) */}
         {showLocationPicker && (
           <div className="max-w-md mx-auto w-full p-3.5 bg-[#1c2025]/95 backdrop-blur-2xl border border-[#31353b] rounded-2xl shadow-2xl flex flex-col gap-2 pointer-events-auto animate-in fade-in duration-150">
             <div className="flex items-center justify-between text-[11px] text-[#00daf3] font-['Space_Grotesk'] font-bold uppercase">
@@ -430,163 +601,199 @@ export const RadarScreen: React.FC<RadarScreenProps> = ({
         )}
       </div>
 
-      {/* 2.5 Horizontal Restrooms Carousel within 1km */}
-      <div className="absolute bottom-[208px] sm:bottom-[198px] left-0 right-0 px-3 z-20 pointer-events-auto flex justify-center">
-        <div className="w-full max-w-lg flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
-          {candidateRestrooms.map((r) => {
-            const isSelected = r.id === selectedRestroom.id;
-            return (
+      {/* 3. Bottom Dock Container (Restroom Carousel + Details Card stacked cleanly) */}
+      <div className="absolute bottom-2 left-0 right-0 px-2.5 z-20 pointer-events-auto flex flex-col items-center gap-1 max-w-lg mx-auto">
+        {/* Horizontal Restrooms Carousel within 1km (Slimmer & Compact) */}
+        {!isCardCollapsed && (
+          <div className="w-full flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+            {candidateRestrooms.map((r) => {
+              const isSelected = r.id === selectedRestroom.id;
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => {
+                    playHapticChime('click');
+                    onSelectRestroom(r);
+                  }}
+                  className={`flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[11px] whitespace-nowrap backdrop-blur-xl transition-all cursor-pointer flex-shrink-0 shadow-sm ${
+                    isSelected
+                      ? 'bg-[#00e5ff] text-[#00363d] font-black border border-white scale-102 shadow-[0_0_8px_rgba(0,229,255,0.7)]'
+                      : 'bg-[#1c2025]/90 text-[#c3cad0] border border-[#31353b] hover:bg-[#262a30]'
+                  }`}
+                >
+                  <span>🚻</span>
+                  <span className="font-['Space_Grotesk'] font-bold">{r.distance_meters}m</span>
+                  <span className="truncate max-w-[90px]">{r.name}</span>
+                  {r.open_hours.includes('24') && (
+                    <span
+                      className={`text-[8.5px] px-1 rounded ${
+                        isSelected
+                          ? 'bg-[#00363d] text-[#00e5ff]'
+                          : 'bg-[#00e5ff]/20 text-[#00e5ff]'
+                      }`}
+                    >
+                      24h
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Bottom Clean Toilet Card (Ultra-Compact, Essential Info Only) */}
+        <div className="w-full rounded-2xl bg-[#1c2025]/95 border border-[#31353b] backdrop-blur-2xl px-3 py-2 sm:px-3.5 sm:py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.75)] flex flex-col gap-1.5 transition-all">
+          {isCardCollapsed ? (
+            /* Minimized Bar: Maximum Map Visibility (~40px) */
+            <div className="flex items-center justify-between gap-2">
               <button
-                key={r.id}
                 onClick={() => {
                   playHapticChime('click');
-                  onSelectRestroom(r);
+                  setIsCardCollapsed(false);
                 }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs whitespace-nowrap backdrop-blur-xl transition-all cursor-pointer flex-shrink-0 shadow-lg ${
-                  isSelected
-                    ? 'bg-[#00e5ff] text-[#00363d] font-black border border-white scale-105 shadow-[0_0_12px_rgba(0,229,255,0.7)]'
-                    : 'bg-[#1c2025]/90 text-[#e0e2ea] border border-[#31353b] hover:bg-[#262a30]'
-                }`}
+                className="flex items-center gap-2 min-w-0 text-left flex-1 cursor-pointer"
               >
-                <span>🚻</span>
-                <span className="font-['Space_Grotesk'] font-bold">{r.distance_meters}m</span>
-                <span className="truncate max-w-[110px]">{r.name}</span>
-                {r.open_hours.includes('24') && (
-                  <span
-                    className={`text-[9px] px-1 rounded ${
-                      isSelected
-                        ? 'bg-[#00363d] text-[#00e5ff]'
-                        : 'bg-[#00e5ff]/20 text-[#00e5ff]'
-                    }`}
-                  >
-                    24h
-                  </span>
-                )}
+                <span className="text-sm">🚻</span>
+                <span className="font-['Space_Grotesk'] text-[13.5px] font-bold text-[#e0e2ea] truncate">
+                  {selectedRestroom.name}
+                </span>
+                <span className="font-['Space_Grotesk'] text-[12px] font-extrabold text-[#00e5ff] flex-shrink-0">
+                  {walkDist}m ({walkTime}분)
+                </span>
               </button>
-            );
-          })}
-        </div>
-      </div>
 
-      {/* 3. Bottom Clean Toilet Card (Simple, Direct, Action-Oriented) */}
-      <div className="absolute bottom-4 left-0 right-0 px-3 z-20 pointer-events-auto flex justify-center">
-        <div className="w-full max-w-lg rounded-2xl bg-[#1c2025]/95 border border-[#31353b] backdrop-blur-2xl p-4 shadow-[0_12px_36px_rgba(0,0,0,0.8)] flex flex-col gap-3">
-          {/* Main Info Row */}
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex flex-col flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 mb-0.5">
-                <span className="font-['Space_Grotesk'] text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#00626e] text-[#c3f5ff]">
-                  {selectedRestroom.is_open ? '✅ 개방 중' : '시간 확인 필요'}
-                </span>
-                <span className="font-['Space_Grotesk'] text-[10px] font-semibold text-[#849396]">
-                  {selectedRestroom.open_hours}
-                </span>
-              </div>
-              <h2 className="font-['Space_Grotesk'] text-[18px] font-bold text-[#e0e2ea] truncate leading-tight">
-                {selectedRestroom.name}
-              </h2>
-              <p className="font-['Inter'] text-[12px] text-[#849396] truncate mt-0.5">
-                {selectedRestroom.floor_or_location_details}
-              </p>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="px-1.5 py-0.5 rounded bg-[#46ffb8]/20 text-[#46ffb8] text-[10px] font-bold flex items-center gap-1 border border-[#46ffb8]/40">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#46ffb8] animate-pulse" />
-                  실제 인도(보행로) 기준
-                </span>
-                {isRouteLoading && (
-                  <span className="text-[10px] text-[#849396] flex items-center gap-1 animate-pulse">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#00daf3]" />
-                    경로 계산 중...
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Distance & Time Badge */}
-            <div className="flex flex-col items-end flex-shrink-0">
-              <div className="flex items-baseline gap-1">
-                <span className="font-['Space_Grotesk'] text-[24px] font-black text-[#00e5ff] leading-none">
-                  {walkDist}
-                </span>
-                <span className="font-['Space_Grotesk'] text-[12px] font-bold text-[#00daf3]">m</span>
-              </div>
-              <span className="font-['Space_Grotesk'] text-[12px] font-bold text-[#46ffb8]">
-                도보 약 {walkTime}분
-              </span>
-              <div className="mt-1 flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#00e5ff]/15 border border-[#00e5ff]/40 text-[#c3f5ff] text-[10.5px] font-bold font-['Space_Grotesk'] shadow-sm">
-                <span className="material-symbols-outlined text-[12px] text-[#00e5ff]">schedule</span>
-                <span>{walkRoute ? walkRoute.eta_text : '도착시간 계산 중...'}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Details Row: Door code & Amenities */}
-          <div className="flex items-center justify-between text-[11px] bg-[#101419]/80 px-3 py-2 rounded-xl border border-[#31353b]">
-            <div className="flex items-center gap-1 text-[#e0e2ea]">
-              <span className="material-symbols-outlined text-[15px] text-[#00daf3]">
-                {selectedRestroom.has_password ? 'key' : 'lock_open'}
-              </span>
-              <span>
-                {selectedRestroom.has_password
-                  ? `비밀번호: ${selectedRestroom.door_code || '영수증 하단'}`
-                  : '비밀번호 없음 (즉시 진입)'}
-              </span>
-              {selectedRestroom.has_password && selectedRestroom.door_code && (
+              <div className="flex items-center gap-1.5 flex-shrink-0">
                 <button
-                  onClick={handleCopyDoorCode}
-                  className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-[#262a30] text-[#00daf3] hover:bg-[#31353b] cursor-pointer"
+                  onClick={() => {
+                    playHapticChime('nav_start');
+                    onStartNavigation();
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-[#00e5ff] to-[#00b4d8] text-[#00363d] font-['Space_Grotesk'] text-[12px] font-black flex items-center gap-1 shadow-md active:scale-95 transition-transform cursor-pointer"
                 >
-                  {copiedCode ? '복사됨!' : '복사'}
+                  <span className="material-symbols-outlined text-[15px]">navigation</span>
+                  <span>안내</span>
                 </button>
-              )}
+                <button
+                  onClick={() => {
+                    playHapticChime('click');
+                    setIsCardCollapsed(false);
+                  }}
+                  className="w-7 h-7 rounded-lg bg-[#262a30] hover:bg-[#31353b] text-[#849396] hover:text-[#e0e2ea] flex items-center justify-center cursor-pointer transition-colors"
+                  title="카드 펼치기"
+                >
+                  <span className="material-symbols-outlined text-[18px]">expand_less</span>
+                </button>
+              </div>
             </div>
+          ) : (
+            /* Expanded Compact Card: Clean, High-information density, Low vertical footprint */
+            <>
+              {/* Row 1: Header (Title, Distance/ETA, and Collapse Toggle) */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <span className="font-['Space_Grotesk'] text-[9.5px] font-bold px-1.5 py-0.5 rounded-md bg-[#00626e]/80 text-[#c3f5ff] flex-shrink-0">
+                    {selectedRestroom.is_open ? '개방중' : '확인'}
+                  </span>
+                  <h2 className="font-['Space_Grotesk'] text-[15px] sm:text-[16px] font-bold text-[#e0e2ea] truncate leading-tight">
+                    {selectedRestroom.name}
+                  </h2>
+                </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleSpeakGuidance}
-                className="flex items-center gap-1 text-[#00e5ff] hover:text-[#c3f5ff] cursor-pointer"
-                title="음성으로 길안내 듣기 (TTS)"
-              >
-                <span className="material-symbols-outlined text-[16px]">volume_up</span>
-                <span className="text-[11px] font-bold">음성듣기</span>
-              </button>
-              <button
-                onClick={() => onOpenPreview(selectedRestroom)}
-                className="flex items-center gap-1 text-[#849396] hover:text-[#e0e2ea] cursor-pointer"
-                title="건물 내부 진입 상세 보기"
-              >
-                <span className="material-symbols-outlined text-[16px]">info</span>
-                <span>상세</span>
-              </button>
-            </div>
-          </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-['Space_Grotesk'] text-[18px] font-black text-[#00e5ff] leading-none">
+                      {walkDist}
+                    </span>
+                    <span className="font-['Space_Grotesk'] text-[11px] font-bold text-[#00daf3]">m</span>
+                    <span className="text-[11px] text-[#46ffb8] font-bold font-['Space_Grotesk'] ml-0.5">
+                      약 {walkTime}분
+                    </span>
+                  </div>
+                  {/* Minimize Card Button */}
+                  <button
+                    onClick={() => {
+                      playHapticChime('click');
+                      setIsCardCollapsed(true);
+                    }}
+                    className="w-6 h-6 rounded-md bg-[#262a30]/80 hover:bg-[#31353b] text-[#849396] hover:text-[#e0e2ea] flex items-center justify-center cursor-pointer transition-colors"
+                    title="지도 더 넓게 보기 (접기)"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">expand_more</span>
+                  </button>
+                </div>
+              </div>
 
-          {/* Action Buttons: 1. 길안내 시작, 2. 카카오맵 길찾기 */}
-          <div className="flex items-center gap-2">
-            {/* Primary Action Button: 길안내 시작 */}
-            <button
-              onClick={() => {
-                playHapticChime('nav_start');
-                onStartNavigation();
-              }}
-              className="flex-1 h-12 rounded-xl bg-gradient-to-r from-[#00e5ff] to-[#00b4d8] text-[#00363d] font-['Space_Grotesk'] text-[15px] font-black flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(0,229,255,0.6)] active:scale-[0.98] transition-all cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[20px]">navigation</span>
-              <span>급똥내비 길안내 시작</span>
-            </button>
+              {/* Row 2: Location details, Password, Audio/Detail icons in a single slim line */}
+              <div className="flex items-center justify-between text-[11px] text-[#849396] min-w-0 gap-1.5 border-t border-[#31353b]/50 pt-1">
+                <div className="flex items-center gap-1.5 min-w-0 truncate">
+                  <span className="text-[#c3cad0] truncate font-medium max-w-[130px] sm:max-w-[200px]">
+                    {selectedRestroom.floor_or_location_details || '상세 위치 확인 필요'}
+                  </span>
+                  <span className="text-[#3b494c]">·</span>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <span className="material-symbols-outlined text-[13px] text-[#00daf3]">
+                      {selectedRestroom.has_password ? 'key' : 'lock_open'}
+                    </span>
+                    <span className={selectedRestroom.has_password ? 'text-[#ffc107] font-semibold' : 'text-[#46ffb8] font-semibold'}>
+                      {selectedRestroom.has_password
+                        ? `${selectedRestroom.door_code || '영수증 하단'}`
+                        : '비번 없음'}
+                    </span>
+                    {selectedRestroom.has_password && selectedRestroom.door_code && (
+                      <button
+                        onClick={handleCopyDoorCode}
+                        className="text-[9.5px] px-1 py-0.2 rounded bg-[#262a30] text-[#00daf3] hover:bg-[#31353b] cursor-pointer"
+                      >
+                        {copiedCode ? '복사됨' : '복사'}
+                      </button>
+                    )}
+                  </div>
+                </div>
 
-            {/* Kakao Mobility Directions Direct Button */}
-            <a
-              href={kakaoDirectionsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="h-12 px-4 rounded-xl bg-[#fee500] hover:bg-[#fedd00] text-[#191919] font-['Space_Grotesk'] text-[13px] font-bold flex items-center justify-center gap-1.5 shadow-lg active:scale-95 transition-transform cursor-pointer flex-shrink-0"
-              title="카카오맵/카카오내비 앱에서 길찾기 열기"
-            >
-              <span className="font-black text-[15px]">K</span>
-              <span className="hidden sm:inline">카카오 길찾기</span>
-            </a>
-          </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={handleSpeakGuidance}
+                    className="p-1 rounded hover:bg-[#262a30] text-[#00e5ff] cursor-pointer transition-colors"
+                    title="음성 안내 듣기"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">volume_up</span>
+                  </button>
+                  <button
+                    onClick={() => onOpenPreview(selectedRestroom)}
+                    className="p-1 rounded hover:bg-[#262a30] text-[#849396] hover:text-[#e0e2ea] cursor-pointer transition-colors"
+                    title="건물 내부 진입 상세 보기"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">info</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Row 3: Action Buttons (Compact height: h-10) */}
+              <div className="flex items-center gap-2 mt-0.5">
+                <button
+                  onClick={() => {
+                    playHapticChime('nav_start');
+                    onStartNavigation();
+                  }}
+                  className="flex-1 h-10 rounded-xl bg-gradient-to-r from-[#00e5ff] to-[#00b4d8] text-[#00363d] font-['Space_Grotesk'] text-[14px] font-black flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(0,229,255,0.5)] active:scale-[0.98] transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[18px]">navigation</span>
+                  <span>급똥내비 길안내 시작</span>
+                </button>
+
+                <a
+                  href={kakaoDirectionsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-10 px-3.5 rounded-xl bg-[#fee500] hover:bg-[#fedd00] text-[#191919] font-['Space_Grotesk'] text-[12.5px] font-bold flex items-center justify-center gap-1 shadow-md active:scale-95 transition-transform cursor-pointer flex-shrink-0"
+                  title="카카오맵/카카오내비 앱에서 길찾기 열기"
+                >
+                  <span className="font-black text-[14px]">K</span>
+                  <span>길찾기</span>
+                </a>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

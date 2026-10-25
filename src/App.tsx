@@ -422,9 +422,14 @@ export default function App() {
         {/* Top Fixed Header */}
         <Header
           currentTab={currentTab}
+          isNavigating={currentTab === 'nav'}
           onBack={handleExitNavigation}
+          onStopNav={handleExitNavigation}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenInspector={() => setIsInspectorOpen(true)}
+          urgencyLevel={urgencyLevel}
+          onToggleUrgency={handleToggleUrgency}
+          onOpenVoiceModal={() => setIsVoiceModalOpen(true)}
         />
 
         {/* Screens */}

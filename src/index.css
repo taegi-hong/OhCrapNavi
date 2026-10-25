@@ -81,3 +81,17 @@
   transform-origin: center center;
   animation: radarSweep 4s linear infinite;
 }
+
+@keyframes walkPulseFlow {
+  from {
+    stroke-dashoffset: 48;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.walk-route-flow {
+  stroke-dasharray: 8 12;
+  animation: walkPulseFlow 1.2s linear infinite;
+}
